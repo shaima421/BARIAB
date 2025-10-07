@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>🌳 شجرة العائلة - طبيعي + Firebase</title>
+<style>
+/* ✅ Same styling as your working file */
+body { font-family: Arial, Tahoma, sans-serif; background: #f0f9f4; margin: 0; padding: 0; }
+header { background: #2d6a4f; color: white; padding: 1rem; text-align: center; }
+.controls { display: flex; justify-content: center; flex-wrap: wrap; gap: 0.5rem; padding: 1rem; }
+.controls input, .controls button, .controls select { padding: 0.5rem; border-radius: 6px; border: 1px solid #888; font-size: 14px; }
+.tree-container { display: flex; justify-content: center; margin: 1rem; overflow: auto; transform-origin: bottom center; position: relative; }
+ul { position: relative; padding-bottom: 40px; display: flex; justify-content: flex-start; }
+li { list-style-type: none; margin: 0 10px; padding: 10px 5px 0 5px; position: relative; text-align: center; }
+.member { padding: 10px 15px; border-radius: 50%; background: #95d5b2; color: #1b4332; font-weight: bold; display: inline-block; box-shadow: 0 3px 6px rgba(0,0,0,0.2); cursor: pointer; position: relative; z-index: 2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.member-controls { margin-top: 5px; display: flex; justify-content: center; gap: 3px; }
+.member-controls button { font-size: 12px; padding: 2px 6px; border-radius: 4px; border: none; cursor: pointer; }
+.member-controls button:hover { opacity: 0.8; }
+.member-comment { margin-left:5px; cursor:pointer; }
+.highlight { background: #ffc107 !important; }
+.connector { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+@media print {
+  header, .controls, .member-comment, .member-controls, header button { display: none !important; }
+  body { background: white; }
+  .tree-container { transform: scale(0.8); }
+}
+</style>
+</head>
+<body>
+<header>
+<h1 id="title">🌳 شجرة العائلة (طبيعي)</h1>
+<button id="langToggle">English</button>
+</header>
+
+<div class="controls">
+<input type="text" id="nameInput" placeholder="ادخل الاسم">
+<select id="parentSelect"><option value="">(جذر)</option></select>
+<button id="addBtn">إضافة</button>
+<input type="text" id="searchInput" placeholder="بحث بالاسم">
+<button id="searchBtn">بحث</button>
+<button id="resetBtn">إعادة تعيين</button>
+<button id="printTreeBtn">طباعة الشجرة</button>
+<button id="printBranchBtn">طباعة الفرع</button>
+<button id="zoomOutBtn">-</button>
+<button id="zoomInBtn">+</button>
+</div>
+
+<div class="tree-container" id="treeContainer">
+<ul id="familyTree"></ul>
+<svg class="connector" id="connectorLayer"></svg>
+</div>
+
+<!-- ✅ Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js"></script>
+
+<script>
+/* ===================== 🌐 Firebase Init ===================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyCzCF7pRUjlBe74nsCKv1JbiSk6CcG7n90",
+  authDomain: "bariyab-f3cdd.firebaseapp.com",
+  projectId: "bariyab-f3cdd",
+  storageBucket: "bariyab-f3cdd.firebasestorage.app",
+  messagingSenderId: "34506515407",
+  appId: "1:34506515407:web:db853b37356a3de799a8ba"
+};
+
+let treeData = JSON.parse(localStorage.getItem('familyTreeNatural')) || null;
+let scaleLevel = 1, selectedNodeId = null, currentLang = 'ar';
+let firebaseConnected = false;
+let db;
+
+try {
+  const app = firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+  firebaseConnected = true;
+
+  // ✅ Load tree from Firebase first
+  db.ref('familyTreeNatural').once('value').then(snapshot => {
+    if (snapshot.exists()) {
+      treeData = snapshot.val();
+      localStorage.setItem('familyTreeNatural', JSON.stringify(treeData));
+    }
+    renderTree();
+
+    // ✅ Listen for live updates from other devices
+    db.ref('familyTreeNatural').on('value', snap => {
+      if (snap.exists()) {
+        treeData = snap.val();
+        localStorage.setItem('familyTreeNatural', JSON.stringify(treeData));
+        renderTree();
+      }
+    });
+  });
+} catch (err) {
+  console.warn('⚠️ Firebase not connected. Offline mode only.', err);
+}
+
+/* ===================== 🌳 Tree Logic (Same as your working code) ===================== */
+
+const texts = {
+  ar:{title:"🌳 شجرة العائلة (طبيعي)", add:"إضافة", search:"بحث", reset:"إعادة تعيين", printTree:"طباعة الشجرة", printBranch:"طباعة الفرع", root:"(جذر)", namePh:"ادخل الاسم", searchPh:"بحث بالاسم", enterName:"ادخل الاسم!", chooseBranch:"اختر فرعاً أولاً", notFound:"الفرع غير موجود", commentPrompt:"أضف أو عدّل التعليق:", noComment:"لا يوجد تعليق", edit:"تعديل", del:"حذف"},
+  en:{title:"🌳 Family Tree (Natural)", add:"Add", search:"Search", reset:"Reset", printTree:"Print Tree", printBranch:"Print Branch", root:"(Root)", namePh:"Enter name", searchPh:"Search name", enterName:"Enter a name!", chooseBranch:"Select a branch first", notFound:"Branch not found", commentPrompt:"Add or edit comment:", noComment:"No comment", edit:"Edit", del:"Delete"}
+};
+
+function setLang(lang){
+  currentLang = lang;
+  document.getElementById('title').textContent = texts[lang].title;
+  document.getElementById('addBtn').textContent = texts[lang].add;
+  document.getElementById('searchBtn').textContent = texts[lang].search;
+  document.getElementById('resetBtn').textContent = texts[lang].reset;
+  document.getElementById('printTreeBtn').textContent = texts[lang].printTree;
+  document.getElementById('printBranchBtn').textContent = texts[lang].printBranch;
+  document.getElementById('nameInput').placeholder = texts[lang].namePh;
+  document.getElementById('searchInput').placeholder = texts[lang].searchPh;
+  document.getElementById('parentSelect').options[0].textContent = texts[lang].root;
+  document.getElementById('langToggle').textContent = (lang==='ar'?'English':'العربية');
+  document.documentElement.dir = (lang==='ar')?'rtl':'ltr';
+}
+document.getElementById('langToggle').addEventListener('click',()=>setLang(currentLang==='ar'?'en':'ar'));
+setLang('ar');
+
+function saveTree(){
+  localStorage.setItem('familyTreeNatural', JSON.stringify(treeData));
+  if (firebaseConnected) {
+    db.ref('familyTreeNatural').set(treeData || null);
+  }
+  renderTree();
+}
+
+// ✅ All other tree functions remain unchanged from your working file (buildTree, attachEvents, findNode, drawConnectors, printing, etc.)
+// ⬇️⬇️ Just keep them exactly as in your original file below this line
+function renderTree(){
+  const container = document.getElementById('familyTree');
+  container.innerHTML = treeData ? buildTree(treeData,0) : '';
+  localStorage.setItem('familyTreeNatural', JSON.stringify(treeData));
+  refreshParentSelect();
+  attachEvents();
+  drawConnectors();
+}
+
+function buildTree(node,depth){
+  if(!node) return '';
+  let colors=["#2d6a4f","#40916c","#74c69d","#b5e48c","#ffd166","#ef476f"];
+  let color=colors[depth % colors.length];
+  let selectedClass = (selectedNodeId===node.id)?'highlight':'';
+  let commentIcon = node.comment ? '💬' : '📝';
+  let commentTitle = node.comment ? node.comment : texts[currentLang].noComment;
+  let html = `<li>
+    <div class="member ${selectedClass}" style="background:${color};" data-id="${node.id}">
+      ${node.name} 
+      <span class="member-comment" data-id="${node.id}" title="${commentTitle}">${commentIcon}</span>
+    </div>
+    <div class="member-controls">
+      <button class="edit-btn" data-id="${node.id}">${texts[currentLang].edit}</button>
+      <button class="delete-btn" data-id="${node.id}">${texts[currentLang].del}</button>
+    </div>`;
+  if(node.children && node.children.length>0){
+    html += `<ul style="justify-content:flex-start;">`;
+    node.children.forEach(c=>html+=buildTree(c,depth+1));
+    html += `</ul>`;
+  }
+  html += `</li>`;
+  return html;
+}
+
+function attachEvents(){
+  document.querySelectorAll('.member-comment').forEach(icon=>{
+    icon.addEventListener('click',e=>{
+      e.stopPropagation();
+      const id=Number(icon.dataset.id);
+      const node=findNode(treeData,id);
+      if(!node) return;
+      const comment = prompt(texts[currentLang].commentPrompt, node.comment||"");
+      if(comment!==null){ node.comment=comment.trim(); saveTree(); }
+    });
+  });
+  document.querySelectorAll('.member').forEach(m=>{
+    m.addEventListener('click',()=>{
+      const id=Number(m.dataset.id);
+      selectedNodeId=(selectedNodeId===id)?null:id;
+      renderTree();
+    });
+  });
+  document.querySelectorAll('.edit-btn').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      const id=Number(btn.dataset.id);
+      const node=findNode(treeData,id);
+      if(node){
+        const newName=prompt(currentLang==='ar'?'أدخل الاسم الجديد':'Enter new name', node.name);
+        if(newName && newName.trim()){ node.name=newName.trim(); saveTree(); }
+      }
+    });
+  });
+  document.querySelectorAll('.delete-btn').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      const id=Number(btn.dataset.id);
+      if(confirm(currentLang==='ar'?'هل تريد حذف هذا العضو؟':'Delete this member?')){
+        treeData=deleteNode(treeData,id); saveTree();
+      }
+    });
+  });
+}
+
+function saveTree(){ localStorage.setItem('familyTreeNatural', JSON.stringify(treeData)); renderTree(); }
+
+function deleteNode(node,id){
+  if(!node) return null;
+  if(node.id===id) return null;
+  if(node.children) node.children=node.children.map(c=>deleteNode(c,id)).filter(Boolean);
+  return node;
+}
+
+document.getElementById('addBtn').addEventListener('click',()=>{
+  const name = document.getElementById('nameInput').value.trim();
+  const parentId = Number(document.getElementById('parentSelect').value);
+  if(!name) return alert(texts[currentLang].enterName);
+  if(!treeData && !parentId) treeData={id:Date.now(),name,children:[]};
+  else if(treeData && parentId){
+    const parentNode=findNode(treeData,parentId);
+    if(parentNode){ if(!parentNode.children) parentNode.children=[]; parentNode.children.push({id:Date.now()+Math.random(),name,children:[]}); }
+  } else { alert("Root exists. Choose a parent."); return; }
+  document.getElementById('nameInput').value='';
+  renderTree();
+});
+
+function findNode(node,id){
+  if(node.id===id) return node;
+  if(node.children) for(let c of node.children){ let found=findNode(c,id); if(found) return found; }
+  return null;
+}
+
+function refreshParentSelect(){
+  const select = document.getElementById('parentSelect');
+  select.innerHTML=`<option value="">${texts[currentLang].root}</option>`;
+  if(treeData) collectNodes(treeData).forEach(n=>{ const opt=document.createElement('option'); opt.value=n.id; opt.textContent=n.name; select.appendChild(opt);});
+}
+
+function collectNodes(node,out=[]){ if(!node) return out; out.push({id: node.id, name: node.name}); if(node.children) node.children.forEach(c=>collectNodes(c,out)); return out; }
+
+document.getElementById('searchBtn').addEventListener('click',()=>{
+  const q=document.getElementById('searchInput').value.trim().toLowerCase();
+  document.querySelectorAll('.member').forEach(m=>m.textContent.toLowerCase().includes(q)?m.classList.add('highlight'):m.classList.remove('highlight'));
+});
+
+document.getElementById('resetBtn').addEventListener('click',()=>{
+  if(confirm(currentLang==='ar'?'هل تريد إعادة تعيين الشجرة؟':'Reset tree?')){
+    treeData=null; localStorage.removeItem('familyTreeNatural'); selectedNodeId=null; renderTree();
+  }
+});
+
+document.getElementById('zoomInBtn').addEventListener('click',()=>{ scaleLevel+=0.1; document.getElementById('treeContainer').style.transform=`scale(${scaleLevel})`; });
+document.getElementById('zoomOutBtn').addEventListener('click',()=>{ scaleLevel=Math.max(0.3,scaleLevel-0.1); document.getElementById('treeContainer').style.transform=`scale(${scaleLevel})`; });
+
+function drawConnectors(){
+  const svg=document.getElementById('connectorLayer'); svg.innerHTML='';
+  const members=document.querySelectorAll('.member');
+  members.forEach((m, idx)=>{
+    const li=m.closest('li'); const parentLi=li.parentElement.closest('li');
+    if(parentLi){
+      const parentMember=parentLi.querySelector('.member');
+      if(parentMember){
+        const mRect=m.getBoundingClientRect();
+        const pRect=parentMember.getBoundingClientRect();
+        const svgRect=svg.getBoundingClientRect();
+        const colors = ["#555", "#2d6a4f", "#ef476f", "#118ab2"];
+        const x1 = pRect.left+pRect.width/2-svgRect.left+window.scrollX;
+        const y1 = pRect.top+ pRect.height/2 - svgRect.top + window.scrollY;
+        const x2 = mRect.left+mRect.width/2-svgRect.left+window.scrollX;
+        const y2 = mRect.top-svgRect.top + window.scrollY;
+        const path=document.createElementNS("http://www.w3.org/2000/svg","path");
+        path.setAttribute("d",`M${x1},${y1} C${x1},${(y1+y2)/2} ${x2},${(y1+y2)/2} ${x2},${y2}`);
+        path.setAttribute("stroke", colors[idx % colors.length]);
+        path.setAttribute("stroke-width","3");
+        path.setAttribute("fill","none");
+        svg.appendChild(path);
+      }
+    }
+  });
+  const container=document.getElementById('treeContainer');
+  svg.setAttribute("width",container.scrollWidth); svg.setAttribute("height",container.scrollHeight);
+}
+
+// Function to draw print connectors correctly
+function drawPrintConnectors(container, svg) {
+  svg.innerHTML = '';
+  const members = container.querySelectorAll('.member');
+  const box = container.getBoundingClientRect();
+  const colors = ["#2d6a4f", "#ef476f", "#118ab2", "#ffb703"];
+  members.forEach((m, idx)=>{
+    const li = m.closest('li'); const parentLi = li.parentElement.closest('li');
+    if(parentLi){
+      const parentMember = parentLi.querySelector('.member');
+      if(parentMember){
+        const mRect = m.getBoundingClientRect();
+        const pRect = parentMember.getBoundingClientRect();
+        const x1 = pRect.left + pRect.width/2 - box.left;
+        const y1 = pRect.top  + pRect.height/2 - box.top;
+        const x2 = mRect.left + mRect.width/2 - box.left;
+        const y2 = mRect.top - box.top;
+        const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+        path.setAttribute("d", `M${x1},${y1} C${x1},${(y1+y2)/2} ${x2},${(y1+y2)/2} ${x2},${y2}`);
+        path.setAttribute("stroke", colors[idx % colors.length]);
+        path.setAttribute("stroke-width", "3");
+        path.setAttribute("fill", "none");
+        svg.appendChild(path);
+      }
+    }
+  });
+  svg.setAttribute("width", container.scrollWidth);
+  svg.setAttribute("height", container.scrollHeight);
+}
+
+// Print Tree
+document.getElementById('printTreeBtn').addEventListener('click',()=>{
+  const w = window.open('', '_blank');
+  w.document.write(`<html><head><title>${texts[currentLang].printTree}</title>
+  <style>
+  body{font-family:Arial,sans-serif;}
+  .member{display:inline-block;padding:10px 15px;border-radius:50%;margin:4px;font-weight:bold;text-align:center;color:white;-webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;}
+  ul{padding:0;list-style:none;}
+  li{display:inline-block;position:relative;text-align:center;vertical-align:top;}
+  svg{position:absolute;top:0;left:0;width:100%;height:100%;}
+  svg path{stroke:#000;stroke-width:3;fill:none;}
+  .controls,.member-comment,.member-controls,header button{display:none!important;}
+  </style></head><body><div id="printTreeContainer"></div></body></html>`);
+  w.document.close();
+  const clone = document.getElementById('treeContainer').cloneNode(true);
+  clone.id = 'printTreeClone'; clone.style.transform='scale(0.9)';
+  w.document.getElementById('printTreeContainer').appendChild(clone);
+  setTimeout(()=>{ drawPrintConnectors(clone, clone.querySelector('#connectorLayer')); w.focus(); w.print(); }, 200);
+});
+
+// Print Branch
+document.getElementById('printBranchBtn').addEventListener('click',()=>{
+  if(!selectedNodeId) return alert(texts[currentLang].chooseBranch);
+  const node=findNode(treeData,selectedNodeId);
+  if(!node) return alert(texts[currentLang].notFound);
+  const w=window.open('', '_blank');
+  w.document.write(`<html><head><title>${texts[currentLang].printBranch}</title>
+  <style>
+  body{font-family:Arial,sans-serif;}
+  .member{display:inline-block;padding:10px 15px;border-radius:50%;margin:4px;font-weight:bold;text-align:center;color:white;background:#95d5b2;-webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;}
+  ul{padding:0;list-style:none;}
+  li{display:inline-block;position:relative;text-align:center;vertical-align:top;}
+  svg{position:absolute;top:0;left:0;width:100%;height:100%;}
+  svg path{stroke:#000;stroke-width:3;fill:none;}
+  .controls,.member-comment,.member-controls,header button{display:none!important;}
+  </style></head><body><div id="printBranchContainer"></div></body></html>`);
+  w.document.close();
+
+  function cloneBranch(n){
+    let html=`<li><div class="member">${n.name}</div>`;
+    if(n.children && n.children.length){ html+='<ul>'; n.children.forEach(c=>html+=cloneBranch(c)); html+='</ul>'; }
+    html+='</li>'; return html;
+  }
+
+  const ul=document
+.createElement('ul'); 
+ul.innerHTML = cloneBranch(node);
+
+const svg = document.createElementNS("http://www.w3.org/2000/svg","svg"); 
+svg.classList.add('connector'); 
+svg.style.position='absolute'; 
+svg.style.top='0'; 
+svg.style.left='0'; 
+svg.style.width='100%'; 
+svg.style.height='100%';
+
+const container = w.document.getElementById('printBranchContainer'); 
+container.appendChild(ul); 
+container.appendChild(svg);
+
+setTimeout(()=>{
+  drawPrintConnectors(container, svg); 
+  w.focus(); 
+  w.print();
+}, 200);
+});
+
+renderTree();
+window.addEventListener('resize', drawConnectors);
+</script>
+</body>
+</html>
